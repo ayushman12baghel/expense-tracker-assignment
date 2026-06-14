@@ -1,5 +1,7 @@
 # Splitwise Clone — A Full-Stack MVP
 
+**🌐 Live Demo:** [https://expense-tracker-assignment-iota.vercel.app/](https://expense-tracker-assignment-iota.vercel.app/)
+
 Welcome to the **Splitwise Clone**! This project is a robust, production-ready Minimum Viable Product (MVP) engineered over a 3-day sprint. It replicates the core financial and social features of Splitwise, allowing users to create groups, add multi-party expenses with complex split logic, settle debts using a greedy minimization algorithm, and converse via real-time WebSocket chat.
 
 ## 🚀 Core Features
