@@ -1,6 +1,6 @@
 import React from 'react';
 
-const ImportReportModal = ({ isOpen, onClose, report }) => {
+const ImportReportModal = ({ isOpen, onClose, report, onApprove }) => {
   if (!isOpen || !report) return null;
 
   return (
@@ -9,9 +9,10 @@ const ImportReportModal = ({ isOpen, onClose, report }) => {
         
         <div className="px-6 py-4 border-b border-gray-200">
           <h3 className="text-lg font-medium text-gray-900">
-            Import Report
+            Import Preview (Action Required)
           </h3>
-          <p className="mt-1 text-sm text-gray-500">
+          <p className="mt-1 text-sm text-amber-600 font-medium">
+            Review the following changes. No data has been saved to the database yet.
             Processed {report.totalProcessed} total records from the CSV file.
           </p>
         </div>
@@ -60,12 +61,18 @@ const ImportReportModal = ({ isOpen, onClose, report }) => {
           )}
         </div>
 
-        <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end">
+        <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end space-x-3">
           <button
             onClick={onClose}
+            className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded hover:bg-gray-50 font-medium"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onApprove}
             className="px-4 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700 font-medium"
           >
-            Close Report
+            Approve & Import
           </button>
         </div>
 

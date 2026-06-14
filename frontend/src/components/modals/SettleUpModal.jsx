@@ -20,6 +20,7 @@ export default function SettleUpModal({ isOpen, onClose, groupId, simplifiedDebt
 
     try {
       await api.post(`/api/groups/${groupId}/settlements`, {
+        payerId: currentUser.id,
         payeeId: selectedDebt.to,
         amount: selectedDebt.amount
       });

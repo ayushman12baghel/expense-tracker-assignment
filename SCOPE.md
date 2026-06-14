@@ -43,6 +43,15 @@ The core application uses a relational schema composed of 5 main entities:
    - `user_id` (UUID, Foreign Key -> `users.id`)
    - `amount_owed` (Decimal, Non-Null)
 
+6. **`settlements`** (Debt resolution ledger)
+   - `id` (UUID, Primary Key)
+   - `group_id` (UUID, Foreign Key -> `groups.id`)
+   - `payer_id` (UUID, Foreign Key -> `users.id`)
+   - `payee_id` (UUID, Foreign Key -> `users.id`)
+   - `amount` (Decimal, Non-Null)
+   - `status` (Enum: PENDING, APPROVED, REJECTED)
+   - `created_at` (Timestamp)
+
 ---
 
 ## 🔍 CSV Anomaly Log

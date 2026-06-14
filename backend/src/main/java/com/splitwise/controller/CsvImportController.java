@@ -26,11 +26,12 @@ public class CsvImportController {
     public ResponseEntity<ImportReportResponse> importExpenses(
             @RequestParam("groupId") UUID groupId,
             @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "confirm", defaultValue = "false") boolean confirm,
             @AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
         try {
             User principal = userRepository.findByEmail(userDetails.getUsername())
                     .orElseThrow(() -> new RuntimeException("Authenticated user not found"));
-            ImportReportResponse report = csvImportService.importCsv(groupId, file, principal);
+            ImportReportResponse report = csvImportService.importCsv(groupId, file, principal, confirm);
             return ResponseEntity.ok(report);
         } catch (Exception e) {
             e.printStackTrace();

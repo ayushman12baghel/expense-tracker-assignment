@@ -52,6 +52,15 @@ public class CsvImportService {
         // Deduplication tracker
         Set<String> processedRecords = new HashSet<>();
 
+        // Backdate the principal's membership so they are always active for historical CSV data
+        com.splitwise.entity.GroupMembership creatorMembership = group.getMemberships().stream()
+                .filter(m -> m.getUser().getId().equals(principal.getId()))
+                .findFirst().orElse(null);
+        if (creatorMembership != null && creatorMembership.getJoinedDate() != null) {
+            creatorMembership.setJoinedDate(LocalDate.of(2000, 1, 1));
+            groupRepository.save(group);
+        }
+
         try (CSVReader csvReader = new CSVReader(new InputStreamReader(file.getInputStream()))) {
             String[] headers = csvReader.readNext();
 
@@ -162,7 +171,7 @@ public class CsvImportService {
                     processedRecords.add(dedupeKey);
 
                     // Auto-Provision Ghost Users
-                    User payer = resolveAndProvisionGhostUser(paidBy, group, successfulImports);
+                    User payer = resolveAndProvisionGhostUser(paidBy, group, successfulImports, parsedDate);
 
                     // Anomaly 4: Hidden Settlement
                     if (splitType.isEmpty()) {
@@ -209,10 +218,10 @@ public class CsvImportService {
 
                     // --- NEW FIX: Auto-provision everyone in split_with and split_details ---
                     for (String name : includedNames) {
-                        resolveAndProvisionGhostUser(name, group, successfulImports);
+                        resolveAndProvisionGhostUser(name, group, successfulImports, parsedDate);
                     }
                     for (String name : parsedAmounts.keySet()) {
-                        resolveAndProvisionGhostUser(name, group, successfulImports);
+                        resolveAndProvisionGhostUser(name, group, successfulImports, parsedDate);
                     }
 
                     List<SplitDetails> splits = new ArrayList<>();
@@ -327,7 +336,7 @@ public class CsvImportService {
         return new ImportReportResponse(totalProcessed, successfulImports, anomaliesDetected);
     }
 
-    private User resolveAndProvisionGhostUser(String name, Group group, List<String> successfulImports) {
+    private User resolveAndProvisionGhostUser(String name, Group group, List<String> successfulImports, LocalDate expenseDate) {
         User user = userRepository.findByNameIgnoreCase(name).orElse(null);
         if (user == null) {
             String email = name.toLowerCase().replaceAll("\\s+", "") + "@auto-import.local";
@@ -337,10 +346,20 @@ public class CsvImportService {
         }
 
         final User finalUser = user;
-        boolean alreadyMember = group.getMemberships().stream().anyMatch(m -> m.getUser().getId().equals(finalUser.getId()) && m.getLeftDate() == null);
-        if (!alreadyMember) {
-            group.getMemberships().add(new com.splitwise.entity.GroupMembership(group, user, group.getCreatedAt().toLocalDate()));
+        com.splitwise.entity.GroupMembership existingMembership = group.getMemberships().stream()
+                .filter(m -> m.getUser().getId().equals(finalUser.getId()) && m.getLeftDate() == null)
+                .findFirst()
+                .orElse(null);
+                
+        if (existingMembership == null) {
+            group.getMemberships().add(new com.splitwise.entity.GroupMembership(group, user, expenseDate));
             groupRepository.save(group);
+        } else {
+            // Backdate joined date if this expense happened before they officially joined
+            if (existingMembership.getJoinedDate() != null && existingMembership.getJoinedDate().isAfter(expenseDate)) {
+                existingMembership.setJoinedDate(expenseDate);
+                groupRepository.save(group);
+            }
         }
         return user;
     }

@@ -35,7 +35,12 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         // Expose the STOMP endpoint allowing cross-origin requests (Vercel)
         // using SockJS as a fallback for browsers that don't support raw WebSockets.
+        // Expose a raw WebSocket endpoint
         registry.addEndpoint("/ws")
+                .setAllowedOriginPatterns("*");
+                
+        // Expose a SockJS fallback endpoint just in case
+        registry.addEndpoint("/ws-sockjs")
                 .setAllowedOriginPatterns("*")
                 .withSockJS();
     }

@@ -8,6 +8,9 @@ import SettleUpModal from '../components/modals/SettleUpModal';
 import { useAuth } from '../context/AuthContext';
 import ImportReportModal from '../components/modals/ImportReportModal';
 import AuditTrailModal from '../components/modals/AuditTrailModal';
+import ViewMembersModal from '../components/modals/ViewMembersModal';
+import { Client } from '@stomp/stompjs';
+import SockJS from 'sockjs-client';
 
 export default function GroupDetail() {
   const { id } = useParams();
@@ -17,13 +20,16 @@ export default function GroupDetail() {
   const [group, setGroup] = useState(null);
   const [expenses, setExpenses] = useState([]);
   const [balances, setBalances] = useState(null);
+  const [activityFeed, setActivityFeed] = useState([]);
   const [loading, setLoading] = useState(true);
 
   // Modals state
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
   const [isAddExpenseOpen, setIsAddExpenseOpen] = useState(false);
   const [isSettleUpOpen, setIsSettleUpOpen] = useState(false);
+  const [isViewMembersOpen, setIsViewMembersOpen] = useState(false);
   const [importReport, setImportReport] = useState(null);
+  const [stashedCsvFile, setStashedCsvFile] = useState(null);
   const [selectedDebtForAudit, setSelectedDebtForAudit] = useState(null);
   
   // CSV Upload ref
@@ -31,19 +37,58 @@ export default function GroupDetail() {
 
   useEffect(() => {
     fetchGroupData();
+    
+    // Set up WebSocket connection for real-time updates
+    const token = localStorage.getItem('token');
+    const baseUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin;
+    const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws';
+    
+    const stompClient = new Client({
+      brokerURL: wsUrl,
+      connectHeaders: {
+        Authorization: `Bearer ${token}`
+      },
+      debug: function (str) {
+        // console.log('STOMP: ' + str);
+      },
+      onConnect: () => {
+        console.log('Connected to WebSocket for real-time updates on group:', id);
+        stompClient.subscribe(`/topic/group/${id}`, (message) => {
+          console.log('Real-time event received:', message.body);
+          // An event happened! Re-fetch everything seamlessly
+          fetchGroupData();
+        });
+      },
+      onStompError: (frame) => {
+        console.error('WebSocket Broker error: ' + frame.headers['message']);
+      }
+    });
+
+    stompClient.activate();
+
+    return () => {
+      stompClient.deactivate();
+    };
   }, [id]);
 
   const fetchGroupData = async () => {
     setLoading(true);
     try {
-      const [groupRes, expensesRes, balancesRes] = await Promise.all([
+      const [groupRes, expensesRes, balancesRes, settlementsRes] = await Promise.all([
         api.get(`/api/groups/${id}`),
         api.get(`/api/groups/${id}/expenses`),
-        api.get(`/api/groups/${id}/balances`)
+        api.get(`/api/groups/${id}/balances`),
+        api.get(`/api/groups/${id}/settlements`)
       ]);
       setGroup(groupRes.data);
       setExpenses(expensesRes.data);
       setBalances(balancesRes.data);
+      
+      const merged = [
+        ...expensesRes.data.map(e => ({ ...e, type: 'EXPENSE', timestamp: new Date(e.date).getTime() })),
+        ...settlementsRes.data.map(s => ({ ...s, type: 'SETTLEMENT', timestamp: new Date(s.createdAt).getTime() }))
+      ].sort((a, b) => b.timestamp - a.timestamp);
+      setActivityFeed(merged);
     } catch (err) {
       console.error('Failed to fetch group data', err);
       // Navigate back if unauthorized or not found
@@ -67,21 +112,71 @@ export default function GroupDetail() {
 
     try {
       setLoading(true);
-      const response = await api.post('/api/expenses/import', formData, {
+      const response = await api.post('/api/expenses/import?confirm=false', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      await fetchGroupData();
       
-      // Capture the response and show the report modal
+      // Capture the response and show the report modal for PREVIEW
       if (response.data) {
+        setStashedCsvFile(file);
         setImportReport(response.data);
       }
     } catch (err) {
       console.error('Failed to upload CSV', err);
-      alert('Failed to upload CSV. Please try again.');
+      alert('Failed to preview CSV. Please try again.');
     } finally {
       setLoading(false);
       event.target.value = null; // reset input
+    }
+  };
+
+  const confirmImport = async () => {
+    if (!stashedCsvFile) return;
+
+    const formData = new FormData();
+    formData.append('file', stashedCsvFile);
+    formData.append('groupId', id);
+
+    try {
+      setLoading(true);
+      setImportReport(null);
+      await api.post('/api/expenses/import?confirm=true', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      alert('CSV successfully imported!');
+      await fetchGroupData();
+    } catch (err) {
+      console.error('Failed to confirm CSV import', err);
+      alert('Failed to import CSV. Please try again.');
+    } finally {
+      setLoading(false);
+      setStashedCsvFile(null);
+    }
+  };
+
+  const handleApproveSettlement = async (settlementId) => {
+    try {
+      setLoading(true);
+      await api.put(`/api/groups/${id}/settlements/${settlementId}/approve`);
+      await fetchGroupData();
+    } catch (err) {
+      console.error('Failed to approve settlement', err);
+      alert('Failed to approve settlement. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRejectSettlement = async (settlementId) => {
+    try {
+      setLoading(true);
+      await api.put(`/api/groups/${id}/settlements/${settlementId}/reject`);
+      await fetchGroupData();
+    } catch (err) {
+      console.error('Failed to reject settlement', err);
+      alert('Failed to reject settlement. Please try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -119,11 +214,15 @@ export default function GroupDetail() {
                 {group?.name}
               </h2>
               <div className="mt-1 flex flex-col sm:flex-row sm:flex-wrap sm:mt-0 sm:space-x-6">
-                <div className="mt-2 flex items-center text-sm text-gray-500">
-                  <svg className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div 
+                  className="mt-2 flex items-center text-sm text-emerald-600 hover:text-emerald-700 cursor-pointer font-medium bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200 transition-colors"
+                  onClick={() => setIsViewMembersOpen(true)}
+                  title="Click to view all members"
+                >
+                  <svg className="flex-shrink-0 mr-1.5 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
                   </svg>
-                  {group?.members.length} Members
+                  {group?.members.length} Members (View)
                 </div>
               </div>
             </div>
@@ -166,37 +265,102 @@ export default function GroupDetail() {
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col lg:flex-row gap-8">
         
-        {/* Left column: Expenses Feed */}
         <div className="lg:w-2/3">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">Expenses</h3>
+          {/* Pending Approvals Banner */}
+          {activityFeed.filter(item => item.type === 'SETTLEMENT' && item.status === 'PENDING' && item.payeeId === user?.id).length > 0 && (
+            <div className="bg-amber-50 border-l-4 border-amber-400 p-4 mb-6 rounded shadow-sm">
+              <div className="flex items-center">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-amber-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <p className="text-sm text-amber-800 font-medium">
+                    You have pending settlements awaiting your approval in the activity feed.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Recent Activity</h3>
           <div className="bg-white shadow overflow-hidden sm:rounded-md border border-gray-100">
-            {expenses.length === 0 ? (
+            {activityFeed.length === 0 ? (
               <div className="text-center py-10">
-                <p className="text-sm text-gray-500">No expenses yet. Add one to get started!</p>
+                <p className="text-sm text-gray-500">No activity yet. Add an expense or settle up to get started!</p>
               </div>
             ) : (
               <ul className="divide-y divide-gray-200">
-                {expenses.map((expense) => (
-                  <li key={expense.id}>
-                    <div 
-                      onClick={() => navigate(`/expenses/${expense.id}`)}
-                      className="block hover:bg-gray-50 transition cursor-pointer"
-                    >
-                      <div className="px-4 py-4 sm:px-6 flex items-center justify-between">
-                        <div className="flex flex-col">
-                          <p className="text-sm font-bold text-gray-900 truncate">{expense.description}</p>
-                          <p className="text-xs text-gray-500 mt-1">
-                            {getUserName(expense.payerId)} paid <span className="font-medium text-gray-900">₹{expense.amount.toFixed(2)}</span>
-                          </p>
-                        </div>
-                        <div className="flex flex-col items-end">
-                          <p className="text-xs text-gray-500">{new Date(expense.date).toLocaleDateString()}</p>
-                          <p className="text-xs font-semibold text-emerald-600 mt-1 uppercase">
-                            {expense.splitType}
-                          </p>
+                {activityFeed.map((item) => (
+                  <li key={`${item.type}-${item.id}`}>
+                    {item.type === 'EXPENSE' ? (
+                      <div 
+                        onClick={() => navigate(`/expenses/${item.id}`)}
+                        className="block hover:bg-gray-50 transition cursor-pointer"
+                      >
+                        <div className="px-4 py-4 sm:px-6 flex items-center justify-between">
+                          <div className="flex flex-col">
+                            <p className="text-sm font-bold text-gray-900 truncate">{item.description}</p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {getUserName(item.payerId)} paid <span className="font-medium text-gray-900">₹{item.amount.toFixed(2)}</span>
+                            </p>
+                          </div>
+                          <div className="flex flex-col items-end">
+                            <p className="text-xs text-gray-500">{new Date(item.date).toLocaleDateString()}</p>
+                            <p className="text-xs font-semibold text-emerald-600 mt-1 uppercase">
+                              {item.splitType}
+                            </p>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className={`block ${item.status === 'PENDING' ? 'bg-amber-50 border-l-4 border-amber-400' : item.status === 'REJECTED' ? 'bg-red-50 border-l-4 border-red-400' : 'bg-emerald-50 border-l-4 border-emerald-500'} bg-opacity-50`}>
+                        <div className="px-4 py-4 sm:px-6 flex items-center justify-between">
+                          <div className="flex items-center">
+                            <div className={`flex-shrink-0 rounded-full p-2 mr-3 ${item.status === 'PENDING' ? 'bg-amber-100' : item.status === 'REJECTED' ? 'bg-red-100' : 'bg-emerald-100'}`}>
+                              {item.status === 'PENDING' ? (
+                                <svg className="h-4 w-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                              ) : item.status === 'REJECTED' ? (
+                                <svg className="h-4 w-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              ) : (
+                                <svg className="h-4 w-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                            <div className="flex flex-col">
+                              <p className={`text-sm font-medium ${item.status === 'PENDING' ? 'text-amber-800' : item.status === 'REJECTED' ? 'text-red-800 line-through' : 'text-emerald-800'}`}>
+                                {getUserName(item.payerId)} {item.status === 'REJECTED' ? 'tried to settle up with' : 'settled up with'} {getUserName(item.payeeId)}
+                              </p>
+                              <p className={`text-xs mt-1 font-semibold ${item.status === 'PENDING' ? 'text-amber-600' : item.status === 'REJECTED' ? 'text-red-600' : 'text-emerald-600'}`}>
+                                Paid ₹{item.amount.toFixed(2)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end">
+                            <p className="text-xs text-gray-500">{new Date(item.createdAt).toLocaleDateString()}</p>
+                            <div className="mt-1 flex space-x-2">
+                              {item.status === 'PENDING' && item.payeeId === user?.id && (
+                                <>
+                                  <button onClick={() => handleApproveSettlement(item.id)} className="text-xs font-bold text-white bg-emerald-500 hover:bg-emerald-600 px-2 py-1 rounded">APPROVE</button>
+                                  <button onClick={() => handleRejectSettlement(item.id)} className="text-xs font-bold text-white bg-red-500 hover:bg-red-600 px-2 py-1 rounded">REJECT</button>
+                                </>
+                              )}
+                              {(item.status !== 'PENDING' || item.payeeId !== user?.id) && (
+                                <p className={`text-xs font-semibold uppercase ${item.status === 'PENDING' ? 'text-amber-600' : item.status === 'REJECTED' ? 'text-red-600' : 'text-emerald-600'}`}>
+                                  {item.status}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -289,8 +453,9 @@ export default function GroupDetail() {
       
       <ImportReportModal
         isOpen={!!importReport}
-        onClose={() => setImportReport(null)}
+        onClose={() => { setImportReport(null); setStashedCsvFile(null); }}
         report={importReport}
+        onApprove={confirmImport}
       />
       <AuditTrailModal
         isOpen={!!selectedDebtForAudit}
@@ -301,6 +466,11 @@ export default function GroupDetail() {
         user1Name={selectedDebtForAudit ? getUserName(selectedDebtForAudit.from) : ''}
         user2Name={selectedDebtForAudit ? getUserName(selectedDebtForAudit.to) : ''}
         simplifiedAmount={selectedDebtForAudit?.amount}
+      />
+      <ViewMembersModal
+        isOpen={isViewMembersOpen}
+        onClose={() => setIsViewMembersOpen(false)}
+        members={group?.members || []}
       />
     </div>
   );

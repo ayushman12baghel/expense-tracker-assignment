@@ -1,5 +1,7 @@
 package com.splitwise.dto;
 
+import com.splitwise.entity.SettlementStatus;
+
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -20,5 +22,6 @@ public class SettlementResponse {
     private UUID payerId;
     private UUID payeeId;
     private BigDecimal amount;
+    private SettlementStatus status;
     private LocalDateTime createdAt;
 }

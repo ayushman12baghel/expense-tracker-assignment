@@ -14,6 +14,9 @@ import java.util.UUID;
 @AllArgsConstructor
 public class CreateSettlementRequest {
 
+    @NotNull(message = "Payer ID is required")
+    private UUID payerId;
+
     @NotNull(message = "Payee ID is required")
     private UUID payeeId;
 
