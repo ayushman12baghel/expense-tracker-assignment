@@ -58,8 +58,13 @@ public class CsvImportService {
                 .findFirst().orElse(null);
         if (creatorMembership != null && creatorMembership.getJoinedDate() != null) {
             creatorMembership.setJoinedDate(LocalDate.of(2000, 1, 1));
-            groupRepository.save(group);
+            if (confirm) {
+                groupRepository.save(group);
+            }
         }
+        
+        // Cache for dry run to prevent duplicate ghost user logging
+        Map<String, User> dryRunGhostUsers = new HashMap<>();
 
         try (CSVReader csvReader = new CSVReader(new InputStreamReader(file.getInputStream()))) {
             String[] headers = csvReader.readNext();
@@ -171,7 +176,7 @@ public class CsvImportService {
                     processedRecords.add(dedupeKey);
 
                     // Auto-Provision Ghost Users
-                    User payer = resolveAndProvisionGhostUser(paidBy, group, successfulImports, parsedDate);
+                    User payer = resolveAndProvisionGhostUser(paidBy, group, successfulImports, parsedDate, confirm, dryRunGhostUsers);
 
                     // Anomaly 4: Hidden Settlement
                     if (splitType.isEmpty()) {
@@ -218,10 +223,10 @@ public class CsvImportService {
 
                     // --- NEW FIX: Auto-provision everyone in split_with and split_details ---
                     for (String name : includedNames) {
-                        resolveAndProvisionGhostUser(name, group, successfulImports, parsedDate);
+                        resolveAndProvisionGhostUser(name, group, successfulImports, parsedDate, confirm, dryRunGhostUsers);
                     }
                     for (String name : parsedAmounts.keySet()) {
-                        resolveAndProvisionGhostUser(name, group, successfulImports, parsedDate);
+                        resolveAndProvisionGhostUser(name, group, successfulImports, parsedDate, confirm, dryRunGhostUsers);
                     }
 
                     List<SplitDetails> splits = new ArrayList<>();
@@ -318,8 +323,10 @@ public class CsvImportService {
                         continue;
                     }
 
-                    CreateExpenseRequest request = new CreateExpenseRequest(description, amount, payer.getId(), parsedDate, parsedSplitType, splits);
-                    expenseService.createExpense(groupId, request, principal);
+                    if (confirm) {
+                        CreateExpenseRequest request = new CreateExpenseRequest(description, amount, payer.getId(), parsedDate, parsedSplitType, splits);
+                        expenseService.createExpense(groupId, request, principal);
+                    }
                     successfulImports.add(description + " [Imported as Expense]");
 
                 } catch (Exception ex) {
@@ -328,37 +335,47 @@ public class CsvImportService {
             }
         }
 
-        // --- MEERA'S RULE: TWO-STEP APPROVAL (DRY RUN) ---
-        if (!confirm) {
-            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
-        }
+        // Removed Rollback to prevent UnexpectedRollbackException from crashing the controller
 
         return new ImportReportResponse(totalProcessed, successfulImports, anomaliesDetected);
     }
 
-    private User resolveAndProvisionGhostUser(String name, Group group, List<String> successfulImports, LocalDate expenseDate) {
+    private User resolveAndProvisionGhostUser(String name, Group group, List<String> successfulImports, LocalDate expenseDate, boolean confirm, Map<String, User> dryRunGhostUsers) {
         User user = userRepository.findByNameIgnoreCase(name).orElse(null);
+        
+        if (user == null && dryRunGhostUsers.containsKey(name.toLowerCase())) {
+            user = dryRunGhostUsers.get(name.toLowerCase());
+        }
+
         if (user == null) {
             String email = name.toLowerCase().replaceAll("\\s+", "") + "@auto-import.local";
             user = User.builder().name(name).email(email).passwordHash(passwordEncoder.encode("ghost123")).build();
-            user = userRepository.save(user);
+            if (confirm) {
+                user = userRepository.save(user);
+            } else {
+                dryRunGhostUsers.put(name.toLowerCase(), user);
+            }
             successfulImports.add("Auto-provisioned ghost user: " + name);
         }
 
         final User finalUser = user;
         com.splitwise.entity.GroupMembership existingMembership = group.getMemberships().stream()
-                .filter(m -> m.getUser().getId().equals(finalUser.getId()) && m.getLeftDate() == null)
+                .filter(m -> m.getUser().getId() != null && m.getUser().getId().equals(finalUser.getId()) && m.getLeftDate() == null)
                 .findFirst()
                 .orElse(null);
                 
         if (existingMembership == null) {
-            group.getMemberships().add(new com.splitwise.entity.GroupMembership(group, user, expenseDate));
-            groupRepository.save(group);
+            if (confirm) {
+                group.getMemberships().add(new com.splitwise.entity.GroupMembership(group, user, expenseDate));
+                groupRepository.save(group);
+            }
         } else {
             // Backdate joined date if this expense happened before they officially joined
             if (existingMembership.getJoinedDate() != null && existingMembership.getJoinedDate().isAfter(expenseDate)) {
-                existingMembership.setJoinedDate(expenseDate);
-                groupRepository.save(group);
+                if (confirm) {
+                    existingMembership.setJoinedDate(expenseDate);
+                    groupRepository.save(group);
+                }
             }
         }
         return user;
