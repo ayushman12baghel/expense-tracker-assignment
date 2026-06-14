@@ -144,7 +144,6 @@ export default function GroupDetail() {
       await api.post('/api/expenses/import?confirm=true', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      alert('CSV successfully imported!');
       await fetchGroupData(false);
     } catch (err) {
       console.error('Failed to confirm CSV import', err);
