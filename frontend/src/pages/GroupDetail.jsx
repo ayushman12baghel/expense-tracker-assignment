@@ -55,8 +55,8 @@ export default function GroupDetail() {
         console.log('Connected to WebSocket for real-time updates on group:', id);
         stompClient.subscribe(`/topic/group/${id}`, (message) => {
           console.log('Real-time event received:', message.body);
-          // An event happened! Re-fetch everything seamlessly
-          fetchGroupData();
+          // An event happened! Re-fetch everything seamlessly in the background
+          fetchGroupData(false);
         });
       },
       onStompError: (frame) => {
@@ -71,8 +71,8 @@ export default function GroupDetail() {
     };
   }, [id]);
 
-  const fetchGroupData = async () => {
-    setLoading(true);
+  const fetchGroupData = async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     try {
       const [groupRes, expensesRes, balancesRes, settlementsRes] = await Promise.all([
         api.get(`/api/groups/${id}`),
@@ -144,7 +144,7 @@ export default function GroupDetail() {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       alert('CSV successfully imported!');
-      await fetchGroupData();
+      await fetchGroupData(false);
     } catch (err) {
       console.error('Failed to confirm CSV import', err);
       alert('Failed to import CSV. Please try again.');
@@ -158,7 +158,7 @@ export default function GroupDetail() {
     try {
       setLoading(true);
       await api.put(`/api/groups/${id}/settlements/${settlementId}/approve`);
-      await fetchGroupData();
+      await fetchGroupData(false);
     } catch (err) {
       console.error('Failed to approve settlement', err);
       alert('Failed to approve settlement. Please try again.');
@@ -171,7 +171,7 @@ export default function GroupDetail() {
     try {
       setLoading(true);
       await api.put(`/api/groups/${id}/settlements/${settlementId}/reject`);
-      await fetchGroupData();
+      await fetchGroupData(false);
     } catch (err) {
       console.error('Failed to reject settlement', err);
       alert('Failed to reject settlement. Please try again.');
@@ -435,7 +435,7 @@ export default function GroupDetail() {
         onExpenseAdded={(newExpense) => {
           setExpenses([newExpense, ...expenses]);
           // Refresh balances after adding an expense
-          fetchGroupData();
+          fetchGroupData(false);
         }}
       />
       <SettleUpModal
@@ -447,7 +447,7 @@ export default function GroupDetail() {
         members={group?.members || []}
         onSettlementComplete={() => {
           // Refresh everything after a settlement
-          fetchGroupData();
+          fetchGroupData(false);
         }}
       />
       
